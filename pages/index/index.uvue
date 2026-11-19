@@ -34,6 +34,9 @@
 				<!-- #ifdef APP-ANDROID || APP-HARMONY -->
 				<button class="action-btn" :disabled="!initialized" @tap="handleLoginWithProviders">动态 Token 登录</button>
 				<!-- #endif -->
+				<!-- #ifdef APP-IOS -->
+				<button class="action-btn" :disabled="!initialized" @tap="handleLoginWithProviders">静态 Token 登录(loginWithProviders)</button>
+				<!-- #endif -->
 				<button class="action-btn" @tap="handleLogout">登出</button>
 			</view>
 			<text class="state-text" :class="loginStatus === 'logined' ? 'state-on' : 'state-off'">
@@ -60,22 +63,13 @@
 
 <script setup lang="uts">
 	import {
-		initNIMSDK,
-		NIMFail,
-		NIMInitSuccess,
 		V2NIMLoginListener,
 		V2NIMLoginService
 	} from '@/uni_modules/nim-uts-sdk'
-	// 蒸汽模式（Android/Harmony）下使用插件的 JSON 初始化入口，避免 options 实例跨桥。
-	// iOS/Web 仍使用旧的 initNIMSDK(options)。
-	// #ifdef APP-ANDROID
+	// 蒸汽模式（页面逻辑层是 JS）下，嵌套在对象里的类实例过桥会退化成 UTSJSONObject，
+	// 因此 Android / iOS / 鸿蒙三端统一使用 JSON 初始化入口，结果统一为 Promise。
+	// #ifdef APP-ANDROID || APP-HARMONY || APP-IOS
 	import { initNIMSDKJson } from '@/uni_modules/nim-uts-sdk'
-	// #endif
-	// #ifdef APP-HARMONY
-	import { initNIMSDKJson } from '@/uni_modules/nim-uts-sdk'
-	// #endif
-	// #ifdef APP-IOS
-	import { SDKOptions } from '@/uni_modules/nim-uts-sdk'
 	// #endif
 	import { getStoredString, setStoredString } from '../common/demo-utils.uts'
 
@@ -132,13 +126,6 @@
 		console.log(title, payloadText)
 	}
 
-	// iOS 仍使用 SDKOptions 入口；Android/Harmony 蒸汽模式走 initNIMSDKJson。
-	// #ifdef APP-IOS
-	const buildOptions = () : SDKOptions => {
-		return { appKey: appkey.value } as SDKOptions
-	}
-	// #endif
-
 	const ensureLoginService = () => {
 		if (loginService == null) {
 			const service = new V2NIMLoginService()
@@ -162,18 +149,6 @@
 		}
 	}
 
-	const onInitSuccess = (res : NIMInitSuccess) => {
-		initialized.value = true
-		setStoredString('demo_appkey', appkey.value)
-		printResult('initNIMSDK success', JSON.stringify(res))
-		uni.showToast({ title: '初始化成功', icon: 'success' })
-	}
-
-	const onInitFail = (err : NIMFail) => {
-		printResult('initNIMSDK fail', JSON.stringify(err))
-		uni.showToast({ title: '初始化失败', icon: 'none' })
-	}
-
 	const handleInit = () => {
 		if (initialized.value) {
 			uni.showToast({ title: '已初始化，无需重复初始化', icon: 'none' })
@@ -181,8 +156,8 @@
 		}
 		// 蒸汽模式（页面逻辑层是 JS）下，嵌套在对象里的 SDKOptions 实例过桥会退化成 UTSJSONObject，
 		// 调 initNIMSDK({ options: ... }) 会抛 ClassCastException；
-		// Android/Harmony 改用 initNIMSDKJson：配置走 JSON，结果走 Promise。
-		// #ifdef APP-ANDROID
+		// 三端统一改用 initNIMSDKJson：配置走 JSON，结果走 Promise（成功 code = 200）。
+		// #ifdef APP-ANDROID || APP-HARMONY || APP-IOS
 		initNIMSDKJson({
 			appKey: appkey.value
 		} as UTSJSONObject).then((res) => {
@@ -196,29 +171,6 @@
 				printResult('initNIMSDKJson fail', JSON.stringify(res))
 				uni.showToast({ title: res.desc.length > 0 ? res.desc : '初始化失败', icon: 'none' })
 			}
-		})
-		// #endif
-		// #ifdef APP-HARMONY
-		initNIMSDKJson({
-			appKey: appkey.value
-		} as UTSJSONObject).then((res) => {
-			if (res.code == 200) {
-				initialized.value = true
-				setStoredString('demo_appkey', appkey.value)
-				printResult('initNIMSDKJson success', JSON.stringify(res))
-				uni.showToast({ title: '初始化成功', icon: 'success' })
-			} else {
-				initialized.value = false
-				printResult('initNIMSDKJson fail', JSON.stringify(res))
-				uni.showToast({ title: res.desc.length > 0 ? res.desc : '初始化失败', icon: 'none' })
-			}
-		})
-		// #endif
-		// #ifdef APP-IOS
-		initNIMSDK({
-			options: buildOptions(),
-			success: onInitSuccess,
-			fail: onInitFail
 		})
 		// #endif
 	}
@@ -270,6 +222,31 @@
 				uni.showToast({ title: '动态 Token 登录成功', icon: 'success' })
 			} else {
 				uni.showToast({ title: res.desc.length > 0 ? res.desc : '动态 Token 登录失败', icon: 'none' })
+			}
+			printResult('loginWithProviders', JSON.stringify(res))
+		})
+	}
+	// #endif
+	// #ifdef APP-IOS
+	// iOS 桥接层没有「回调返回值」通道：provider 无法把 token 同步回原生，
+	// 传非 null provider 会明确返回 code = 2003，因此 iOS 只演示静态 token 路径（provider 传 null）。
+	const handleLoginWithProviders = () => {
+		if (!initialized.value) {
+			uni.showToast({ title: '请先初始化', icon: 'none' })
+			return
+		}
+		ensureLoginService()
+		loginService!.loginWithProviders(accountId.value, token.value, {
+			authType: 1,
+			syncLevel: DATA_SYNC_LEVEL_FULL
+		} as UTSJSONObject, null, null).then((res) => {
+			if (res.code == 200) {
+				loginStatus.value = 'logined'
+				setStoredString('demo_accountId', accountId.value)
+				setStoredString('demo_token', token.value)
+				uni.showToast({ title: '登录成功', icon: 'success' })
+			} else {
+				uni.showToast({ title: res.desc.length > 0 ? res.desc : '登录失败', icon: 'none' })
 			}
 			printResult('loginWithProviders', JSON.stringify(res))
 		})
