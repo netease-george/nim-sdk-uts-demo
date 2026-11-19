@@ -2,8 +2,8 @@
 	"name": "nim-uts-sdk-demo",
 	"appid": "__UNI__1997414",
 	"description": "",
-	"versionName": "1.0.0",
-	"versionCode": "100",
+	"versionName": "1.0.1",
+	"versionCode": "101",
 	"uni-app-x": {
 		"styleIsolationVersion": "2",
 		"vapor-default-script-lang": "ts",

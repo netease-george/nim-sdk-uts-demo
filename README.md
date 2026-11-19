@@ -2,9 +2,13 @@
 
 网易云信 IM `nim-uts-sdk`（UTS 插件）的 uni-app x 演示工程。一套代码可编译到 Android / iOS / 鸿蒙三端。
 
+> 当前版本：1.0.1。三端统一使用 `initNIMSDKJson(options): Promise<...>` 初始化；登录支持 `login` 与
+> `loginWithProviders`（iOS 的动态 token provider 受桥接限制，需传 `null` 使用静态 token）。
+
 ## 功能
 
-- 初始化 `nim-uts-sdk`
+- 初始化 `nim-uts-sdk`（`initNIMSDKJson`，Android / iOS / 鸿蒙统一 Promise 形态）
+- 登录 / 动态 token 登录（`login` / `loginWithProviders`，iOS 走静态 token 路径）
 - 登录 / 登出 / 登录状态监听
 - 用户、好友、本地会话、消息、群 5 个常用模块接口测试
 - 页面底部展示接口调用和查询返回结果
@@ -18,15 +22,18 @@
 
 本仓库已将 `uni_modules/nim-uts-sdk` 加入 `.gitignore`，克隆后工程里**没有这个插件**。
 
-蒸汽模式适配依赖本地插件里的 `initNIMSDKJson` 入口，以及消息 / 好友等公共方法内部的
-`any -> 原生类型` 归一化逻辑（`createTextMessage`、`sendMessage`、`getMessageList`、`addFriend` 等）。
-**市场版插件没有这些适配**，直接导入会在真机上出现跨桥类型错误。本工程当前通过软链接使用本地 SDK 源码：
+蒸汽模式适配依赖本地插件里的 `initNIMSDKJson` 入口（Android / iOS / 鸿蒙三端统一，返回 Promise），
+以及消息 / 好友等公共方法内部的 `any -> 原生类型` 归一化逻辑（`createTextMessage`、`sendMessage`、
+`getMessageList`、`addFriend` 等）。**市场版插件没有这些适配**，直接导入会在真机上出现跨桥类型错误。
+
+本工程通过软链接或目录拷贝使用本地 SDK 源码（二选一）：
 
 ```sh
-uni_modules/nim-uts-sdk -> /Users/george/uniappProject/nim-uts-sdk/uni_modules/nim-uts-sdk
+ln -s /path/to/nim-uts-sdk/uni_modules/nim-uts-sdk uni_modules/nim-uts-sdk
+# cp -R /path/to/nim-uts-sdk/uni_modules/nim-uts-sdk uni_modules/nim-uts-sdk
 ```
 
-如果换机器或重新克隆，请把该软链接指向包含蒸汽模式适配的本地插件版本（或把本地插件目录拷贝进来）。
+如果换机器或重新克隆，请重新指向包含蒸汽模式适配的本地插件版本。
 
 ### 1. 云信账号信息（必填）
 
@@ -121,15 +128,23 @@ if (status == LOGIN_STATUS_LOGINED) { /* ... */ }
 initNIMSDK({ options: new AndroidSDKOptions(), success: ..., fail: ... })
 ```
 
-Android 端改用插件新增的 `initNIMSDKJson`：options 与回调**分参数**传递（当前 SDK 的签名），
-`AndroidSDKOptions` 由插件按 JSON 字段构造；options 里只支持可 JSON 化的字段，嵌套回调类配置会被判为不支持并返回 fail：
+Android / iOS / 鸿蒙三端统一改用 `initNIMSDKJson(options): Promise<NIMResult<UTSJSONObject>>`：
+配置走 JSON，结果走 Promise（成功 `code = 200`、`data = null`，失败也 resolve），页面不再传回调参数：
 
 ```uts
-initNIMSDKJson({ appKey: appkey.value } as UTSJSONObject, onInitSuccess, onInitFail, null)
+initNIMSDKJson({ appKey: appkey.value } as UTSJSONObject).then((res) => {
+	if (res.code == 200) {
+		// 初始化成功
+	} else {
+		// res.code / res.desc 为失败原因
+	}
+})
 ```
 
-对应实现见 `uni_modules/nim-uts-sdk/utssdk/app-android/Initialize.uts` 的 `initNIMSDKJson`
-（市场版插件默认没有这个入口，需要按本工程内的版本使用）。iOS / 鸿蒙仍走 `initNIMSDK({ options })`。
+字段按平台对齐：Android 用 `AndroidSDKOptions` 字段、鸿蒙用 `HarmonySDKOptions` 字段、
+iOS 用当前 `IOSSDKOptions` 已支持的字段（`appKey`、`apnsCername`、`pkCername`、`v2`、`useV1Login`、`enableV2*`）。
+iOS 对 `serverConfig` / `mixPushConfig` / `authProvider` 等对象回调类字段以及 `avoidNosAccelerationBuckets`
+会明确返回失败，不会静默丢弃。
 
 #### 3. 登录：`login` + JSON option
 
@@ -138,6 +153,21 @@ SDK 已撤回 `loginJson`：Android 的 `login` 实现本身接收 `UTSJSONObjec
 
 ```uts
 loginService.login(accountId, token, { syncLevel: 0 })
+```
+
+动态 token / 第三方回调鉴权用 `loginWithProviders`，provider 必须作为**顶层函数参数**传入：
+
+| 平台 | provider 回调 | 说明 |
+| --- | --- | --- |
+| Android / 鸿蒙 | 支持 | 传 `tokenProvider` / `loginExtensionProvider`，原生在需要时同步取 token |
+| iOS | 不支持 | iOS 桥接层没有回调返回值通道，传非 null provider 会明确返回 `code = 2003`；请传 `null` 走静态 token 登录 |
+
+```uts
+// iOS：provider 传 null（静态 token）
+loginService.loginWithProviders(accountId, token, { authType: 1, syncLevel: 0 } as UTSJSONObject, null, null)
+
+// Android / 鸿蒙：provider 作为顶层回调
+loginService.loginWithProviders(accountId, token, { authType: 1, syncLevel: 0 } as UTSJSONObject, (id: string): string => token, null)
 ```
 
 #### 4. 消息：公共方法内部做 JSON 归一化
@@ -177,8 +207,8 @@ friendService.addFriend(accountId, { addMode: 2, postscript: 'hi' })
 - 当前 SDK 的跨桥策略是：`initNIMSDKJson` 单独处理初始化，Message / Friend / Team 等公共方法接收 `any`
   并在插件内做字段级归一化；`loginJson`、`addFriendJson`、消息 `*Json`、群 builder 以及 Setting / Storage 等
   `*Json` 镜像都已移除或不再需要。
-- 工程内 Android 专属逻辑（`#ifdef APP-ANDROID`）都加了 `TODO(iOS/Harmony/Web)` 注释；
-  当前只剩 `initNIMSDKJson` 一处平台差异。
+- 三端初始化已统一为 `initNIMSDKJson`（Promise），页面不再按平台拼 `SDKOptions`；
+  当前平台差异只剩「iOS 不支持 provider 回调」这一处，已在第 3 节说明。
 - 若真机遇到枚举入参抛 `ClassCastException`，说明对应接口还没有在插件内做字段级归一化，
   需要在插件侧补 `*FromBridge` / `*FromJson` 转换，而不是在页面侧硬转类型。
 - 蒸汽模式下页面自身即可滚动，根节点 `scroll-view` 的 `scroll-y` 属性会告警，可按需改回 `view`。
